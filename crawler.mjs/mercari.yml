@@ -1,0 +1,42 @@
+name: mercari-crawl
+on:
+  workflow_dispatch: {}        # 手動実行(テスト用)
+  schedule:
+    - cron: "23 */2 * * *"     # 2時間ごと(混雑しない23分に実行)
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # サイトの⚙設定(自動巡回ON/OFF・間隔・夜間停止)に従う。手動実行のときは常に巡回。
+      - name: Gate check (site settings)
+        id: gate
+        if: github.event_name == 'schedule'
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+        run: |
+          R=$(curl -s --max-time 30 "${GAS_URL}?type=batgate&token=${GAS_TOKEN}" || echo '{"run":true,"reason":"gate unreachable"}')
+          echo "gate: $R"
+          if echo "$R" | grep -qi '"run": *false'; then echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          node-version: 20
+
+      - name: Install Playwright Chromium
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          npm init -y > /dev/null
+          npm install playwright > /dev/null
+          npx playwright install --with-deps chromium
+
+      - name: Crawl Mercari
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+        run: node crawler.mjs
